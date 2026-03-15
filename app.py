@@ -1,10 +1,34 @@
 import speech_recognition as sr
-import pyttsx3
 from translate import Translator
 import sys
+import asyncio
+import edge_tts
+import os
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
+import pygame
 
-engine = pyttsx3.init()
-engine.setProperty('rate', 150)
+async def tts(text, lang):
+    if "pl-PL" in lang:
+        voice = "en-US-GuyNeural"
+    else:
+        voice = "pl-PL-MarekNeural"
+
+    output_file = "output.mp3"
+
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(output_file)
+
+    pygame.mixer.init()
+    pygame.mixer.music.load(output_file)
+    pygame.mixer.music.play()
+
+    while pygame.mixer.music.get_busy():
+        await asyncio.sleep(0.1)
+    
+    pygame.mixer.quit()
+
+    if os.path.exists(output_file):
+        os.remove(output_file)
 
 
 def recognise(lang="pl-PL"):
@@ -35,7 +59,7 @@ def translate_text(text, from_="pl", to_="en"):
 
 def choose_language():
     while True:
-        print("\nWybierz język: Powiedz 'polski' lub 'angielski'")
+        print("\nWybierz język z którego chcesz przetłumaczyć:\nPowiedz 'polski' lub 'angielski'")
         print("Aby zakończyć, powiedz 'wyjdź', 'stop' lub 'koniec'")
 
         choose = recognise()
@@ -56,14 +80,22 @@ def choose_language():
             print("Nie rozpoznano języka, spróbuj ponownie...")
 
 
-lang = choose_language()
+async def main():
+    while True:
+        lang = choose_language()
 
-text = recognise(lang)
-if lang == "pl-PL":
-    print(f"Rozpoznany tekst: {text}")
-    translated_text = translate_text(text, "pl", "en")
-    print(f"Translated: {translated_text}")
-elif lang == "en-US":
-    print(f"Recognized text: {text}")
-    translated_text = translate_text(text, "en", "pl")
-    print(f"Translated: {translated_text}")
+        text = recognise(lang)
+
+        if lang == "pl-PL":
+            print(f"Rozpoznany tekst: {text}")
+            translated_text = translate_text(text, "pl", "en")
+            print(f"Translated: {translated_text}")
+            await tts(translated_text, lang)
+        else:
+            print(f"Recognized text: {text}")
+            translated_text = translate_text(text, "en", "pl")
+            print(f"Translated: {translated_text}")
+            await tts(translated_text, lang)
+
+if __name__ == "__main__":
+    asyncio.run(main())
