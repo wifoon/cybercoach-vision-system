@@ -1,10 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import Webcam from "react-webcam";
+import io from "socket.io-client";
 import {
   PoseLandmarker,
   FilesetResolver,
   DrawingUtils,
 } from "@mediapipe/tasks-vision";
+
+const socket = io(import.meta.env.VITE_BACKEND_URL || "http://localhost:5000");
 
 function App() {
   const webcamRef = useRef(null);
@@ -12,7 +15,18 @@ function App() {
   const landmarkerRef = useRef(null);
   const requestRef = useRef(null);
 
+  const [serverMsg, setServerMsg] = useState("Brak połączenia");
+  const lastSendTime = useRef(0);
+  const [serverPoints, setServerPoints] = useState(null);
+
   useEffect(() => {
+    socket.on("pose_result", (data) => {
+      setServerMsg(data.message);
+      if (data.points) {
+        setServerPoints(data.points);
+      }
+    });
+
     let isRunning = true;
 
     const initMediaPipe = async () => {
@@ -66,6 +80,12 @@ function App() {
             color: "#FF0000",
             lineWidth: 2,
           });
+
+          const now = Date.now();
+          if (now - lastSendTime.current > 100) {
+            socket.emit("pose_data", { landmarks: landmarks });
+            lastSendTime.current = now;
+          }
         }
       }
 
@@ -79,6 +99,7 @@ function App() {
     return () => {
       isRunning = false;
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      socket.off("pose_result");
     };
   }, []);
 
@@ -100,6 +121,13 @@ function App() {
           ref={canvasRef}
           className="absolute top-0 left-0 w-full h-full -scale-x-100"
         />
+      </div>
+      <div className="text-xl font-bold text-cyan-400">
+        Serwer: {serverMsg}
+        <span className="block text-sm font-mono text-green-400 mt-2 whitespace-pre-wrap">
+          Punkt:{" "}
+          {serverPoints ? JSON.stringify(serverPoints, null, 2) : "Czekam..."}
+        </span>
       </div>
     </div>
   );
