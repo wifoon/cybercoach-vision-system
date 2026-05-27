@@ -15,15 +15,17 @@ function App() {
   const landmarkerRef = useRef(null);
   const requestRef = useRef(null);
 
-  const [serverMsg, setServerMsg] = useState("Brak połączenia");
+  const [messages, setMessages] = useState(["Brak połączenia"]);
+  const [reps, setReps] = useState("");
   const lastSendTime = useRef(0);
-  const [serverPoints, setServerPoints] = useState(null);
 
   useEffect(() => {
     socket.on("pose_result", (data) => {
-      setServerMsg(data.message);
-      if (data.points) {
-        setServerPoints(data.points);
+      if (data.messages) {
+        setMessages(data.messages);
+      }
+      if (data.reps !== undefined) {
+        setReps(data.reps);
       }
     });
 
@@ -67,7 +69,12 @@ function App() {
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        if (results.landmarks && results.landmarks[0]) {
+        if (
+          results.worldLandmarks &&
+          results.worldLandmarks[0] &&
+          results.landmarks
+        ) {
+          const worldLandmarks = results.worldLandmarks[0];
           const landmarks = results.landmarks[0];
           const drawingUtils = new DrawingUtils(ctx);
 
@@ -83,7 +90,10 @@ function App() {
 
           const now = Date.now();
           if (now - lastSendTime.current > 100) {
-            socket.emit("pose_data", { landmarks: landmarks });
+            socket.emit("pose_data", {
+              landmarks: landmarks,
+              world_landmarks: results.worldLandmarks[0],
+            });
             lastSendTime.current = now;
           }
         }
@@ -109,25 +119,38 @@ function App() {
         Cyber-Trener
       </h1>
 
-      <div className="relative rounded-3xl overflow-hidden border-8 border-slate-800 shadow-[0_0_50px_rgba(34,211,238,0.2)]">
+      <div className="bg-gray-800 px-4 py-2 rounded text-white font-mono text-xl border border-gray-700">
+        Reps: <span className="font-bold text-blue-400">{reps}</span>
+      </div>
+
+      <div className="relative w-full max-w-4xl bg-black border-2 border-gray-700 shadow-lg">
         <Webcam
           ref={webcamRef}
-          className="w-full max-w-4xl h-auto block"
-          mirrored={true}
+          className="w-full h-auto block opacity-80"
           audio={false}
         />
 
         <canvas
           ref={canvasRef}
-          className="absolute top-0 left-0 w-full h-full -scale-x-100"
+          className="absolute top-0 left-0 w-full h-full"
         />
       </div>
-      <div className="text-xl font-bold text-cyan-400">
-        Serwer: {serverMsg}
-        <span className="block text-sm font-mono text-green-400 mt-2 whitespace-pre-wrap">
-          Punkt:{" "}
-          {serverPoints ? JSON.stringify(serverPoints, null, 2) : "Czekam..."}
-        </span>
+
+      <div className="w-full max-w-4xl mt-4 flex flex-col gap-2">
+        {Array.isArray(messages) ? (
+          messages.map((msg, index) => (
+            <div
+              key={index}
+              className="px-4 py-3 text-lg font-bold rounded border bg-slate-800 text-slate-300 border-slate-600"
+            >
+              {msg}
+            </div>
+          ))
+        ) : (
+          <div className="px-4 py-3 text-lg font-bold rounded border bg-slate-800 text-slate-500 border-slate-700">
+            Oczekiwanie na dane...
+          </div>
+        )}
       </div>
     </div>
   );
