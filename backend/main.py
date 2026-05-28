@@ -37,10 +37,20 @@ def calculate_angle_3d(p1, p2, p3):
     angle = np.degrees(np.arccos(dot_product))
     return angle
 
-def calculate_horizontal_angle(p1, p2):
-    dy = abs(p2['y'] - p1['y'])
-    dx = abs(p2['x'] - p1['x'])
-    return math.degrees(math.atan2(dy, dx))
+def calculate_absolute_angle(p1, p2):
+    torso_vector = np.array([
+        p2['x'] - p1['x'],
+        p2['y'] - p1['y'],
+        p2['z'] - p1['z']
+    ])
+    
+    gravity_vector = np.array([0.0, 1.0, 0.0])
+    
+    torso_norm = torso_vector / np.linalg.norm(torso_vector)
+    dot_product = np.dot(torso_norm, gravity_vector)
+    
+    angle = np.degrees(np.arccos(np.clip(dot_product, -1.0, 1.0)))
+    return angle
 
 def analyse_posture(landmarks, world_landmarks):
     global workout_state
@@ -88,8 +98,9 @@ def analyse_posture(landmarks, world_landmarks):
 
         #print(f"ratio: {avg_ratio:.3f} elbow: {elbow_angle:.3f} | back: {back_angle_ear:.3f} | {is_cat_back}")
 
-    torso_angle = calculate_horizontal_angle(left_hip, left_shoulder)
-    if torso_angle > 40:
+    torso_angle = calculate_absolute_angle(left_hip, left_shoulder)
+    print(torso_angle)
+    if torso_angle > 120:
         errors.append("Pochyl sie do przodu")
 
     if abs(current_knee_angle - workout_state['last_valid_knee']) < 15:
