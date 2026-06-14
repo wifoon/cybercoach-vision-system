@@ -24,11 +24,7 @@ function App() {
     socket.on("pose_result", (data) => {
       if (data.messages) setMessages(data.messages);
       if (data.reps !== undefined) setReps(data.reps);
-<<<<<<< HEAD
-      if (data.phase) setPhase(data.phase); // <-- Dodaj to
-=======
       if (data.phase) setPhase(data.phase);
->>>>>>> 1b85ab8129cf94cd4e9c181b7e316a4dd8bf67a5
     });
 
     let isRunning = true;
