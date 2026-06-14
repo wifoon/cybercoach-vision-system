@@ -17,16 +17,14 @@ function App() {
 
   const [messages, setMessages] = useState(["Brak połączenia"]);
   const [reps, setReps] = useState("");
+  const [phase, setPhase] = useState("");
   const lastSendTime = useRef(0);
 
   useEffect(() => {
     socket.on("pose_result", (data) => {
-      if (data.messages) {
-        setMessages(data.messages);
-      }
-      if (data.reps !== undefined) {
-        setReps(data.reps);
-      }
+      if (data.messages) setMessages(data.messages);
+      if (data.reps !== undefined) setReps(data.reps);
+      if (data.phase) setPhase(data.phase); // <-- Dodaj to
     });
 
     let isRunning = true;
@@ -119,8 +117,13 @@ function App() {
         Cyber-Trener
       </h1>
 
-      <div className="bg-gray-800 px-4 py-2 rounded text-white font-mono text-xl border border-gray-700">
-        Reps: <span className="font-bold text-blue-400">{reps}</span>
+      <div className="flex gap-4 mb-4">
+        <div className="bg-gray-800 px-4 py-2 rounded text-white font-mono text-xl border border-gray-700">
+          Reps: <span className="font-bold text-blue-400">{reps}</span>
+        </div>
+        <div className="bg-gray-800 px-4 py-2 rounded text-white font-mono text-xl border border-gray-700">
+          Faza: <span className="font-bold text-green-400">{phase}</span>
+        </div>
       </div>
 
       <div className="relative w-full max-w-4xl bg-black border-2 border-gray-700 shadow-lg">

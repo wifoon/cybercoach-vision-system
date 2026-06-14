@@ -1,8 +1,6 @@
-import os
 import math
-from collections import deque
 import numpy as np
-import statistics
+from collections import deque
 from flask import Flask
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
@@ -11,140 +9,232 @@ app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-ratio_buffer = deque(maxlen=15)
-knee_buffer = deque(maxlen=7)
 
-workout_state = {
-    'phase': 'DOWN',
-    'reps': 0,
-    'last_valid_knee': 150,
-}
+class EMAFilter:
+    def __init__(self, alpha=0.3):
+        self.alpha = alpha
+        self.values = {}
 
-def calculate_distance_3d(p1, p2):
-    return math.sqrt((p2['x'] - p1['x'])**2 + (p2['y'] - p1['y'])**2 + (p2['z'] - p1['z'])**2)
+    def update(self, key, new_value):
+        if key not in self.values:
+            self.values[key] = new_value
+        else:
+            self.values[key] = (
+                self.alpha * new_value + (1 - self.alpha) * self.values[key]
+            )
+        return self.values[key]
 
-def calculate_angle_3d(p1, p2, p3):
-    v1 = np.array([p1['x'] - p2['x'], p1['y'] - p2['y'], p1['z'] - p2['z']])
-    v2 = np.array([p3['x'] - p2['x'], p3['y'] - p2['y'], p3['z'] - p2['z']])
-    
-    v1_norm = v1 / np.linalg.norm(v1)
-    v2_norm = v2 / np.linalg.norm(v2)
-    
-    dot_product = np.dot(v1_norm, v2_norm)
-    
-    dot_product = np.clip(dot_product, -1.0, 1.0)
-    
-    angle = np.degrees(np.arccos(dot_product))
-    return angle
 
-def calculate_absolute_angle(p1, p2):
-    torso_vector = np.array([
-        p2['x'] - p1['x'],
-        p2['y'] - p1['y'],
-        p2['z'] - p1['z']
-    ])
-    
-    gravity_vector = np.array([0.0, 1.0, 0.0])
-    
-    torso_norm = torso_vector / np.linalg.norm(torso_vector)
-    dot_product = np.dot(torso_norm, gravity_vector)
-    
-    angle = np.degrees(np.arccos(np.clip(dot_product, -1.0, 1.0)))
-    return angle
+def calculate_angle_2d(p1, p2, p3):
+    radians = math.atan2(p3["y"] - p2["y"], p3["x"] - p2["x"]) - math.atan2(
+        p1["y"] - p2["y"], p1["x"] - p2["x"]
+    )
+    angle = abs(math.degrees(radians))
+    return 360.0 - angle if angle > 180.0 else angle
 
-def analyse_posture(landmarks, world_landmarks):
-    global workout_state
-    errors = []
-    
-    if landmarks[11].get('visibility', 1.0) < 0.5 or landmarks[23].get('visibility', 1.0) < 0.5:
-        return ["Punkty zasłonięte"], workout_state['reps']
-    
-    left_ear = world_landmarks[7]
-    left_shoulder = world_landmarks[11]
-    left_elbow = world_landmarks[13]
-    left_wrist = world_landmarks[15]
-    left_hip = world_landmarks[23]
-    left_knee = world_landmarks[25]
-    left_ankle = world_landmarks[27]
-    
-    elbow_angle = calculate_angle_3d(left_shoulder, left_elbow, left_wrist)
-    back_angle_ear = calculate_angle_3d(left_hip, left_shoulder, left_ear)
 
-    current_knee_angle = calculate_angle_3d(left_hip, left_knee, left_ankle)
-    
-    torso_length = calculate_distance_3d(left_hip, left_shoulder)
-    thigh_length = calculate_distance_3d(left_hip, left_knee)
-    
-    current_ratio = torso_length / thigh_length
-    ratio_buffer.append(current_ratio)
+def calculate_torso_angle_2d(hip, shoulder):
+    torso = np.array([shoulder["x"] - hip["x"], shoulder["y"] - hip["y"]])
+    up = np.array([0.0, -1.0])
+    torso_norm = torso / (np.linalg.norm(torso) + 1e-6)
+    return np.degrees(np.arccos(np.clip(np.dot(torso_norm, up), -1.0, 1.0)))
 
-    posture_angle = calculate_angle_3d(left_knee, left_hip, left_shoulder)
-    
-    if posture_angle > 160:
-        return ["Zacznij wykonywać ćwiczenie"], workout_state['reps']
-    
-    if len(ratio_buffer) > 5:
-        avg_ratio = sum(ratio_buffer) / len(ratio_buffer)
-        is_cat_back = False
 
-        if avg_ratio < 1.2:
-            is_cat_back = True
+class CyberTrener:
+    def __init__(self):
+        self.is_calibrated = False
+        self.state = "IDLE"
+        self.reps = 0
+        self.smoother = EMAFilter(alpha=0.3)
 
-        elif elbow_angle > 122 and back_angle_ear < 154:
-            is_cat_back = True
+        # Bufory do kalibracji
+        self.buffer_elbow = deque(maxlen=30)
+        self.buffer_back = deque(maxlen=30)
+        self.buffer_torso = deque(maxlen=30)
+        self.buffer_knee = deque(maxlen=30)
 
-        if is_cat_back:
-            errors.append("Wyprostuj plecy! (Koci grzbiet)")
+        # Zapisane kąty idealnej postawy użytkownika
+        self.base_elbow = 0.0
+        self.base_back = 0.0
+        self.base_torso = 0.0
+        self.base_knee = 0.0
 
-        #print(f"ratio: {avg_ratio:.3f} elbow: {elbow_angle:.3f} | back: {back_angle_ear:.3f} | {is_cat_back}")
+        # Proste liczniki błędów (histereza)
+        self.error_counts = {"cat_back": 0, "knees": 0, "torso_up": 0}
+        self.error_msgs = {
+            "cat_back": "Wyprostuj plecy! (Koci grzbiet)",
+            "knees": "Zegnij kolana!",
+            "torso_up": "Obniż tułów.",
+        }
 
-    torso_angle = calculate_absolute_angle(left_hip, left_shoulder)
-    print(torso_angle)
-    if torso_angle > 120:
-        errors.append("Pochyl sie do przodu")
+    def _pobierz_katy(self, landmarks):
+        """Wykrywa stronę ciała i zwraca wygładzone kąty."""
+        # 1. Wybór dominującej strony
+        left_vis = sum(
+            [landmarks[i].get("visibility", 0) for i in [7, 11, 13, 15, 23, 25, 27]]
+        )
+        right_vis = sum(
+            [landmarks[i].get("visibility", 0) for i in [8, 12, 14, 16, 24, 26, 28]]
+        )
+        idx = (
+            {"ear": 8, "sh": 12, "el": 14, "wr": 16, "hip": 24, "kn": 26, "ank": 28}
+            if right_vis > left_vis
+            else {
+                "ear": 7,
+                "sh": 11,
+                "el": 13,
+                "wr": 15,
+                "hip": 23,
+                "kn": 25,
+                "ank": 27,
+            }
+        )
 
-    if abs(current_knee_angle - workout_state['last_valid_knee']) < 15:
-        workout_state['last_valid_knee'] = current_knee_angle
-        knee_buffer.append(current_knee_angle)
+        if landmarks[idx["hip"]].get("visibility", 1.0) < 0.4:
+            return None  # Ciało niewidoczne
 
-    if len(knee_buffer) > 5:
-        smoothed_knee = statistics.median(knee_buffer)
-        if smoothed_knee > 160:
-            errors.append("Ugnij kolana")
+        # 2. Pobranie punktów
+        ear, sh, el, wr = (
+            landmarks[idx["ear"]],
+            landmarks[idx["sh"]],
+            landmarks[idx["el"]],
+            landmarks[idx["wr"]],
+        )
+        hip, kn, ank = (
+            landmarks[idx["hip"]],
+            landmarks[idx["kn"]],
+            landmarks[idx["ank"]],
+        )
 
-    if elbow_angle < 100 and workout_state['phase'] == 'DOWN':
-        workout_state['phase'] = 'UP'
-        
-    elif elbow_angle > 120 and workout_state['phase'] == 'UP':
-        workout_state['phase'] = 'DOWN'
-        workout_state['reps'] += 1
+        # 3. Obliczenia i wygładzanie
+        elbow = self.smoother.update("elbow", calculate_angle_2d(sh, el, wr))
+        knee = self.smoother.update("knee", calculate_angle_2d(hip, kn, ank))
+        torso = self.smoother.update("torso", calculate_torso_angle_2d(hip, sh))
+        back = self.smoother.update("back", calculate_angle_2d(ear, sh, hip))
 
-    if not errors:
-        return ["Poprawna technika"], workout_state['reps']
-    
-    return errors, workout_state['reps']
+        return elbow, knee, torso, back
 
-@socketio.on('connect')
+    def _kalibruj(self, elbow, knee, torso, back):
+        """Zbiera dane o postawie startowej przez około sekundę."""
+        if not (40 < torso < 100):
+            self.buffer_elbow.clear()
+            return ["Pochyl się do pozycji startowej z opuszczonymi rękami."]
+
+        self.buffer_elbow.append(elbow)
+        self.buffer_back.append(back)
+        self.buffer_torso.append(torso)
+        self.buffer_knee.append(knee)
+
+        if len(self.buffer_elbow) == 30:
+            if np.std(self.buffer_elbow) < 5.0 and np.std(self.buffer_torso) < 5.0:
+                self.base_elbow, self.base_back = np.mean(self.buffer_elbow), np.mean(
+                    self.buffer_back
+                )
+                self.base_torso, self.base_knee = np.mean(self.buffer_torso), np.mean(
+                    self.buffer_knee
+                )
+                self.is_calibrated = True
+                return ["Kalibracja udana!"]
+            else:
+                return ["Zatrzymaj się w pozycji startowej na 1 sekundę..."]
+
+        return ["KALIBRACJA..."]
+
+    def _sprawdz_bledy(self, knee, torso, back):
+        """Weryfikuje poprawność postawy i zarządza tolerancją na błędy."""
+        active_errors = []
+
+        # Warunki błędów w bieżącej klatce
+        conditions = {
+            "cat_back": back < (self.base_back - 20),
+            "knees": knee > self.base_knee + 8,
+            "torso_up": torso < self.base_torso - 20,
+        }
+
+        # Aktualizacja liczników i generowanie komunikatów
+        for key, is_bad in conditions.items():
+            if is_bad:
+                self.error_counts[key] += 1
+            else:
+                self.error_counts[key] = max(0, self.error_counts[key] - 2)
+
+            if self.error_counts[key] >= 7:  # Błąd utrzymuje się > 7 klatek
+                self.error_counts[key] = 7
+                active_errors.append(self.error_msgs[key])
+
+        return active_errors
+
+    def _licz_powtorzenia(self, elbow):
+        """Prosta maszyna stanów do liczenia pełnych ruchów."""
+        if self.state == "IDLE" and elbow < self.base_elbow - 10:
+            self.state = "CONCENTRIC"
+        elif self.state == "CONCENTRIC" and elbow < self.base_elbow - 60:
+            self.state = "ECCENTRIC"
+        elif self.state == "ECCENTRIC" and elbow > self.base_elbow - 20:
+            self.reps += 1
+            self.state = "CONCENTRIC"
+
+    # ---------------------------------------------------------
+    # GŁÓWNA FUNKCJA KONTROLERA
+    # ---------------------------------------------------------
+    def process_frame(self, landmarks):
+        # Krok 1: Pobranie kątów
+        angles = self._pobierz_katy(landmarks)
+        if not angles:
+            return ["Pokaż całą sylwetkę z boku"], self.reps, self.state
+
+        elbow, knee, torso, back = angles
+        print(f"Elbow: {elbow:.1f}; base_elbow: {self.base_elbow:.1f}")
+        print(f"Back: {back:.1f}; base_back: {self.base_back:.1f}")
+        print(f"Torso: {torso:.1f}; base_torso: {self.base_torso:.1f}")
+        print(f"Knee: {knee:.1f}; base_knee: {self.base_knee:.1f}")
+
+        # Krok 2: Faza Kalibracji
+        if not self.is_calibrated:
+            msg = self._kalibruj(elbow, knee, torso, back)
+            return msg, self.reps, "KALIBRACJA"
+
+        # Krok 3: Analiza Błędów Techniki
+        errors = self._sprawdz_bledy(knee, torso, back)
+        if errors:
+            return errors, self.reps, "POPRAW POZYCJĘ"
+
+        # Krok 4: Prawidłowy Ruch (Liczenie powtórzeń)
+        self._licz_powtorzenia(elbow)
+
+        # Krok 5: Tłumaczenie stanu dla UI i zwrócenie wyniku
+        fazy_pl = {
+            "IDLE": "OCZEKIWANIE",
+            "CONCENTRIC": "PRZYCIĄGAJ",
+            "ECCENTRIC": "OPUSZCZAJ",
+        }
+
+        return ["Dobra technika!"], self.reps, fazy_pl.get(self.state, "OCZEKIWANIE")
+
+
+# --- OBSŁUGA SERWERA ---
+
+analyzer = CyberTrener()
+
+
+@socketio.on("connect")
 def handle_connect():
-    print('Połączono')
+    global analyzer
+    analyzer = CyberTrener()  # Reset przy odświeżeniu
+    print("Podłączono klienta. Reset kalibracji.")
 
-@socketio.on('pose_data')
+
+@socketio.on("pose_data")
 def handle_pose(data):
-    landmarks = data.get('landmarks', [])
-    world_landmarks = data.get('world_landmarks', [])
+    landmarks = data.get("landmarks", [])
 
-    if not landmarks or len(landmarks) < 33 or not world_landmarks:
+    if not landmarks or len(landmarks) < 33:
         return
 
-    detected_errors, current_reps = analyse_posture(landmarks, world_landmarks)
-    main_message = detected_errors[0]
+    messages, reps, phase = analyzer.process_frame(landmarks)
 
-    emit('pose_result', {
-        'status': 'success',
-        'messages': detected_errors,
-        'reps': current_reps,
-        'phase': workout_state['phase']
-    })
+    emit("pose_result", {"messages": messages, "reps": reps, "phase": phase})
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     socketio.run(app, port=5000, debug=True)
