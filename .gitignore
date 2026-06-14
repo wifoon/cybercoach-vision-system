@@ -37,3 +37,11 @@ env/
 .vscode/
 .idea/
 video/
+repomix-output.xml
+
+# Repomix
+# Pliki i katalogi generowane przez Repomix
+repomix-output/
+repomix/
+.repomix
+*.repomix

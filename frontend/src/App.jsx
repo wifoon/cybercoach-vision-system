@@ -24,7 +24,11 @@ function App() {
     socket.on("pose_result", (data) => {
       if (data.messages) setMessages(data.messages);
       if (data.reps !== undefined) setReps(data.reps);
+<<<<<<< HEAD
       if (data.phase) setPhase(data.phase); // <-- Dodaj to
+=======
+      if (data.phase) setPhase(data.phase);
+>>>>>>> 1b85ab8129cf94cd4e9c181b7e316a4dd8bf67a5
     });
 
     let isRunning = true;
@@ -87,7 +91,7 @@ function App() {
           });
 
           const now = Date.now();
-          if (now - lastSendTime.current > 100) {
+          if (now - lastSendTime.current > 33) {
             socket.emit("pose_data", {
               landmarks: landmarks,
               world_landmarks: results.worldLandmarks[0],
@@ -140,7 +144,7 @@ function App() {
       </div>
 
       <div className="w-full max-w-4xl mt-4 flex flex-col gap-2">
-        {Array.isArray(messages) ? (
+        {Array.isArray(messages) && messages.length > 0 ? (
           messages.map((msg, index) => (
             <div
               key={index}
